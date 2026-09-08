@@ -51,7 +51,8 @@ class TrajectoryInterpolator(
     private var currentAcceleration: Float = 0f
     private var rapidSpeedResponse = true
     private var endpointBraking = false
-    private var stationarySampleCount = 0
+    private var stationarySeconds = 0f
+    private var previousResult: PositionResult? = null
 
     // 连续扰动相位。只在启动时随机一次，后续使用连续函数，避免一跳一跳的假轨迹。
     private var lateralPhase = random.nextDouble(0.0, Math.PI * 2)
@@ -79,7 +80,8 @@ class TrajectoryInterpolator(
         currentSpeed = 0f
         currentAcceleration = 0f
         isCompleted = true
-        stationarySampleCount = REQUIRED_STATIONARY_SAMPLES
+        stationarySeconds = REQUIRED_STATIONARY_SECONDS
+        previousResult = previousResult?.copy(speed = 0f, isCompleted = true)
     }
 
     private fun calculateBaseSpeed(pace: Float): Float {
@@ -99,6 +101,9 @@ class TrajectoryInterpolator(
             )
         }
 
+        if (lastUpdateTimeMs != null && nowMs <= lastUpdateTimeMs!!) {
+            previousResult?.let { return it }
+        }
         val deltaSeconds = calculateDeltaSeconds(nowMs)
         if (!isCompleted) advanceMotion(deltaSeconds)
 
@@ -106,10 +111,10 @@ class TrajectoryInterpolator(
         if (reachedOpenRouteEnd && currentSpeed <= STATIONARY_SPEED_THRESHOLD_MPS) {
             currentSpeed = 0f
             currentAcceleration = 0f
-            stationarySampleCount++
-            if (stationarySampleCount >= REQUIRED_STATIONARY_SAMPLES) isCompleted = true
+            stationarySeconds += deltaSeconds
+            if (stationarySeconds >= REQUIRED_STATIONARY_SECONDS) isCompleted = true
         } else {
-            stationarySampleCount = 0
+            stationarySeconds = 0f
         }
 
         val basePos = positionAtDistance(currentDistance)
@@ -141,7 +146,7 @@ class TrajectoryInterpolator(
         } else {
             movementBearing
         }
-        val finalBearing = smoothBearing(targetBearing)
+        val finalBearing = smoothBearing(targetBearing, deltaSeconds)
 
         smoothedPathLatitude = smoothedPosition.latitude
         smoothedPathLongitude = smoothedPosition.longitude
@@ -166,11 +171,12 @@ class TrajectoryInterpolator(
                 else -> (currentDistance / totalDistance).coerceIn(0f, 1f)
             },
             lapCount = lapCount
-        )
+        ).also { previousResult = it }
     }
 
     private fun calculateDeltaSeconds(now: Long): Float {
         val last = lastUpdateTimeMs
+        if (last != null && now <= last) return 0f
         lastUpdateTimeMs = now
         if (last == null) return 0f
         return ((now - last) / 1000f).coerceIn(0f, MAX_ELAPSED_SECONDS)
@@ -767,7 +773,7 @@ class TrajectoryInterpolator(
         return TargetPosition(lat, lng)
     }
 
-    private fun smoothBearing(targetBearing: Float): Float {
+    private fun smoothBearing(targetBearing: Float, deltaSeconds: Float): Float {
         if (!hasSmoothedBearing) {
             smoothedBearing = targetBearing
             hasSmoothedBearing = true
@@ -775,8 +781,10 @@ class TrajectoryInterpolator(
         }
 
         var delta = (targetBearing - smoothedBearing + 540f) % 360f - 180f
-        delta = delta.coerceIn(-MAX_BEARING_STEP_DEGREES, MAX_BEARING_STEP_DEGREES)
-        smoothedBearing = (smoothedBearing + delta * BEARING_SMOOTHING_FACTOR + 360f) % 360f
+        val factor = (1.0 - (1.0 - BEARING_SMOOTHING_FACTOR).pow(deltaSeconds.toDouble())).toFloat()
+        val maxChange = MAX_BEARING_STEP_DEGREES * BEARING_SMOOTHING_FACTOR * deltaSeconds
+        val change = (delta * factor).coerceIn(-maxChange, maxChange)
+        smoothedBearing = (smoothedBearing + change + 360f) % 360f
         return smoothedBearing
     }
 
@@ -796,11 +804,12 @@ class TrajectoryInterpolator(
         hasSmoothedBearing = false
         smoothedBearing = 0f
         lastUpdateTimeMs = null
+        previousResult = null
         currentSpeed = 0f
         currentAcceleration = 0f
         rapidSpeedResponse = true
         endpointBraking = false
-        stationarySampleCount = 0
+        stationarySeconds = 0f
         lateralPhase = random.nextDouble(0.0, Math.PI * 2)
         slowSpeedNoise = 0.0
         fastSpeedNoise = 0.0
@@ -850,7 +859,7 @@ class TrajectoryInterpolator(
         private const val MAX_STOPPING_PREDICTION_STEPS = 600
         private const val END_POSITION_TOLERANCE_METERS = 1.5f
         private const val STATIONARY_SPEED_THRESHOLD_MPS = 0.12f
-        private const val REQUIRED_STATIONARY_SAMPLES = 2
+        private const val REQUIRED_STATIONARY_SECONDS = 2f
         private const val MIN_BEARING_STEP_METERS = 0.15f
         private const val BEARING_FROM_OBSERVATION_MIN_SPEED_MPS = 1.2f
         private const val OBSERVED_BEARING_WEIGHT = 0.18f

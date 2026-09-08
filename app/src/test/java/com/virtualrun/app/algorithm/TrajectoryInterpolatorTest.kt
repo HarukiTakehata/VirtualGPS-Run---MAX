@@ -16,6 +16,67 @@ import org.junit.Test
 class TrajectoryInterpolatorTest {
 
     @Test
+    fun highFrequencyEightPointLoopRemainsContinuousAcrossLaps() {
+        val points = listOf(
+            RoutePoint(0.0, 0.0), RoutePoint(0.0, 0.0005),
+            RoutePoint(0.0001, 0.0006), RoutePoint(0.0005, 0.0006),
+            RoutePoint(0.0006, 0.0005), RoutePoint(0.0006, 0.0),
+            RoutePoint(0.0005, -0.0001), RoutePoint(0.0001, -0.0001)
+        )
+        for (interval in listOf(100L, 200L)) {
+            val engine = TrajectoryInterpolator(Route(points, 260f, 0L), 6f, true, Random(95))
+            var previous = engine.calculateNextPosition(100_000L)
+            for (elapsed in interval..240_000L step interval) {
+                val result = engine.calculateNextPosition(100_000L + elapsed)
+                val step = distanceMeters(previous.latitude, previous.longitude, result.latitude, result.longitude)
+                assertTrue("loop jump at $elapsed/$interval: $step", step < 1.5f)
+                assertFalse(result.isCompleted)
+                if (elapsed > 3000L) {
+                    val target = 1000f / 360f
+                    assertTrue(result.speed in target * 0.85f..target * 1.15f)
+                }
+                previous = result
+            }
+            assertTrue("loop never advanced a lap", previous.lapCount >= 1)
+        }
+    }
+
+    @Test
+    fun frequencyChangesDoNotMultiplyTravelOrBreakPaceUpdates() {
+        val progress = listOf(100L, 200L, 1000L).map { interval ->
+            val engine = TrajectoryInterpolator(straightRoute(), 6f, random = Random(123))
+            engine.calculateNextPosition(100_000L)
+            var result = engine.calculateNextPosition(100_000L)
+            var elapsed = interval
+            while (elapsed <= 60_000L) {
+                if (elapsed == 30_000L) engine.updatePace(12f)
+                result = engine.calculateNextPosition(100_000L + elapsed)
+                if (elapsed in 3_000L..29_000L || elapsed >= 32_000L) {
+                    val target = 1000f / (if (elapsed < 30_000L) 360f else 720f)
+                    assertTrue("interval=$interval elapsed=$elapsed speed=${result.speed}",
+                        result.speed in target * 0.85f..target * 1.15f)
+                }
+                elapsed += interval
+            }
+            result.progress
+        }
+        assertTrue("cadence changed distance: $progress", progress.max() / progress.min() < 1.08f)
+    }
+
+    @Test
+    fun duplicateAndBackwardTimestampsNeverMoveOrDoubleCount() {
+        val engine = TrajectoryInterpolator(straightRoute(), 6f, random = Random(42))
+        val control = TrajectoryInterpolator(straightRoute(), 6f, random = Random(42))
+        for (time in 100_000L..110_000L step 200L) {
+            val expected = control.calculateNextPosition(time)
+            val actual = engine.calculateNextPosition(time)
+            assertEquals(expected, actual)
+            assertEquals(actual, engine.calculateNextPosition(time))
+            assertEquals(actual, engine.calculateNextPosition(time - 100L))
+        }
+    }
+
+    @Test
     fun startAndPaceChangesReachTheTargetQuickly() {
         val interpolator = TrajectoryInterpolator(straightRoute(), 10f, random = Random(7))
         var now = 1_000L

@@ -2,7 +2,7 @@
 
 一款免 Root 的 Android 虚拟跑步定位 App，支持在地图上规划路线并生成更接近真人跑步的连续轨迹。无需任何 API Key，国内网络直连即可使用。
 
-当前版本：**v1.0.3** · 最低支持 Android 8.0（API 26）
+当前版本：**v1.0.4** · 最低支持 Android 8.0（API 26）
 
 ## 功能特性
 
@@ -31,12 +31,12 @@
 
 ## 下载安装
 
-**[>>> 点击下载 VirtualRun v1.0.3 APK <<<](https://github.com/uinaqx/VirtualGPS-Run---MAX/releases/download/v1.0.3/VirtualRun-v1.0.3.apk)**
+**[>>> 点击下载 VirtualRun v1.0.4 APK <<<](https://github.com/uinaqx/VirtualGPS-Run---MAX/releases/download/v1.0.4/VirtualRun-v1.0.4.apk)**
 
 也可以前往 [GitHub Releases](https://github.com/uinaqx/VirtualGPS-Run---MAX/releases/latest) 查看最新版本和更新说明。
 
-- APK 版本：`1.0.3`（versionCode 4）
-- SHA-256：`9CC75C384640A57A41EBDD6DEA297D2A5614192F1D123542ED690351EBF8A22C`
+- APK 版本：`1.0.4`（versionCode 5）
+- SHA-256：`1937E2FA39A2F2861766BB297D39882585A1F589FC3C98946103869910066BAB`
 
 > 当前 APK 使用 Android Debug 签名，可直接安装测试；项目尚未配置用于应用商店发布的正式签名密钥。
 
@@ -92,7 +92,11 @@ app/src/main/java/com/virtualrun/app/
 ├── model/
 │   └── RoutePoint.kt               # 数据模型（路线点、路线、运动状态）
 ├── service/
-│   └── MockLocationService.kt      # Mock Location 前台服务（核心功能）
+│   ├── MockLocationService.kt      # 前台服务、通知与 UI 广播
+│   ├── MockLocationPump.kt         # 独立 5Hz 定位泵与 Provider 自恢复
+│   ├── FusedLocationAdapters.kt    # 隔离的系统 Fused / Google FLP 通道
+│   ├── LocationSampleFactory.kt    # 统一时间戳与定位元数据
+│   └── DeliveryBackoff.kt          # 有上限的快速重试策略
 ├── algorithm/
 │   └── TrajectoryInterpolator.kt   # 定长圆角、等距重采样、自然漂移与速度控制算法
 ├── ui/
@@ -117,9 +121,12 @@ app/src/main/java/com/virtualrun/app/
 ### Mock Location Service
 - 前台服务保活，确保 APP 后台时定位持续生效
 - 同时模拟 `GPS_PROVIDER`、`NETWORK_PROVIDER` 和系统 `fused` 三个定位源
-- 显式启用 Google Play `FusedLocationProviderClient` mock 模式，兼容跑步软件开始记录后的高精度融合定位请求
+- 显式启用 Google Play `FusedLocationProviderClient` mock 模式；是否被第三方记录仍取决于其定位与模拟位置策略
 - 补全海拔、精度、方位角、卫星数量等字段，提高模拟真实性
-- 以 1Hz 频率发送虚拟位置数据
+- 独立前台优先级 HandlerThread 默认以 5Hz（200ms）投递，支持配置为 10Hz
+- GPS/Network 自恢复；系统 Fused 与 Google FLP 分线程隔离，FLP 最新位置单槽缓存
+- 明确失败时按 250ms 至 5s 退避；不可取消的在途 Google Task 不重复堆积
+- [定位架构、日志采集与真机排查说明](docs/location-pump.md)
 
 ### 轨迹插值算法
 - 路线圆角：仅在顶点附近使用固定距离圆角，避免长路段被切成不自然的大圆弧
@@ -156,6 +163,14 @@ app/src/main/java/com/virtualrun/app/
 欢迎提交 Issue 和 Pull Request！
 
 ## 更新日志
+
+### v1.0.4 (2026-09-08)
+- 将轨迹计算与定位投递分离，独立 5Hz 前台优先级定位泵，不依赖 UI 时钟
+- GPS/Network 增加 Provider 失效恢复；Android Fused 和 Google FLP 使用独立发送线程
+- FLP 最新位置单槽缓存、异步投递、快速指数退避，增加完整失败与发送间隔日志
+- 航向平滑、终点静止判定和元数据噪声改为按时间计算；重复/倒退时间戳不重复积分
+- 12 项单元测试通过，Lint 0 错误、4 项警告；包括 1/5/10Hz 积分与八点路线跨圈测试
+- 此版本是对先前仍有真机反馈问题的投递链路重构，不能仅凭模拟器结果认定所有跑步软件已兼容；详见排查说明
 
 ### v1.0.3 (2026-09-05)
 - 修复 Google Play 融合定位初始化或投递等待阻塞整条定位更新循环的问题，GPS/Network 与 FLP 改为独立更新
