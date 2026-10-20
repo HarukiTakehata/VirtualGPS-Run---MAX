@@ -2,12 +2,13 @@
 
 一款免 Root 的 Android 虚拟跑步定位 App，支持在地图上规划路线并生成更接近真人跑步的连续轨迹。无需任何 API Key，国内网络直连即可使用。
 
-当前版本：**v1.0.4** · 最低支持 Android 8.0（API 26）
+当前版本：**v1.0.5** · 最低支持 Android 8.0（API 26）
 
 ## 功能特性
 
 - **免 Root**：使用 Android 标准 Mock Location API，无需 Root 权限
 - **国内直连地图**：内置高德地图瓦片源，无需 VPN，无需 API Key，开箱即用
+- **卫星地图切换**：右上角切换普通／卫星底图，保留路线与视角，并记住上次选择；首次加载需要网络
 - **高倍地图缩放**：原生瓦片保持在稳定的 `z18`，通过本地超采样继续放大到 `z22`，避免高倍缩放后地图空白
 - **地图选点**：在地图上点击设置起点、途经点和终点
 - **绕圈循环跑**：再次点击起点标记即可闭合路线，支持无限循环跑步
@@ -31,12 +32,12 @@
 
 ## 下载安装
 
-**[>>> 点击下载 VirtualRun v1.0.4 APK <<<](https://github.com/uinaqx/VirtualGPS-Run---MAX/releases/download/v1.0.4/VirtualRun-v1.0.4.apk)**
+**[>>> 点击下载 VirtualRun v1.0.5 APK <<<](https://github.com/uinaqx/VirtualGPS-Run---MAX/releases/download/v1.0.5/VirtualRun-v1.0.5.apk)**
 
 也可以前往 [GitHub Releases](https://github.com/uinaqx/VirtualGPS-Run---MAX/releases/latest) 查看最新版本和更新说明。
 
-- APK 版本：`1.0.4`（versionCode 5）
-- SHA-256：`1937E2FA39A2F2861766BB297D39882585A1F589FC3C98946103869910066BAB`
+- APK 版本：`1.0.5`（versionCode 6）
+- SHA-256：`BFFDE6E9FEB580CC6588C763692FC5DF990AD2877E9153F3C22D5420E9100DE3`
 
 > 当前 APK 使用 Android Debug 签名，可直接安装测试；项目尚未配置用于应用商店发布的正式签名密钥。
 
