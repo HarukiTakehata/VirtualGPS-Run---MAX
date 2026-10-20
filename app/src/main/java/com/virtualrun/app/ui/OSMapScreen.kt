@@ -57,6 +57,7 @@ import com.google.android.gms.maps.model.LatLng
 import com.virtualrun.app.map.CHINA_MAP_MAX_ZOOM_LEVEL
 import com.virtualrun.app.map.CHINA_MAP_MIN_ZOOM_LEVEL
 import com.virtualrun.app.map.ChinaMapTileSource
+import com.virtualrun.app.map.MapMode
 import com.virtualrun.app.map.CoordinateConverter
 import com.virtualrun.app.service.MockLocationService
 import org.osmdroid.events.MapEventsReceiver
@@ -103,6 +104,8 @@ fun OSMapScreen(viewModel: MainViewModel) {
     val latestIsLoopMode by rememberUpdatedState(isLoopMode)
 
     var mapView by remember { mutableStateOf<MapView?>(null) }
+    val mapPreferences = remember(context) { context.getSharedPreferences("map_display", Context.MODE_PRIVATE) }
+    var mapMode by remember { mutableStateOf(MapMode.fromPreference(mapPreferences.getString("mode", null))) }
     var sliderPace by remember(basePace) { mutableFloatStateOf(basePace) }
     var routePolyline by remember { mutableStateOf<Polyline?>(null) }
     var routeMarkers by remember { mutableStateOf<FolderOverlay?>(null) }
@@ -335,7 +338,7 @@ fun OSMapScreen(viewModel: MainViewModel) {
                 },
             factory = { ctx ->
                 MapView(ctx).apply {
-                    setTileSource(ChinaMapTileSource())
+                    setTileSource(ChinaMapTileSource(mapMode))
                     setMinZoomLevel(CHINA_MAP_MIN_ZOOM_LEVEL.toDouble())
                     setMaxZoomLevel(CHINA_MAP_MAX_ZOOM_LEVEL.toDouble())
                     setMultiTouchControls(true)
@@ -353,6 +356,19 @@ fun OSMapScreen(viewModel: MainViewModel) {
                         override fun longPressHelper(p: GeoPoint?): Boolean = false
                     }))
                     mapView = this
+                }
+            },
+            update = { view ->
+                if ((view.tileProvider.tileSource as? ChinaMapTileSource)?.mode != mapMode) {
+                    // Swap only the base layer: keep camera, route overlays and running state.
+                    val zoom = view.zoomLevelDouble
+                    val center = GeoPoint(view.mapCenter.latitude, view.mapCenter.longitude)
+                    view.setTileSource(ChinaMapTileSource(mapMode))
+                    view.setMinZoomLevel(CHINA_MAP_MIN_ZOOM_LEVEL.toDouble())
+                    view.setMaxZoomLevel(CHINA_MAP_MAX_ZOOM_LEVEL.toDouble())
+                    view.controller.setZoom(zoom)
+                    view.controller.setCenter(center)
+                    view.invalidate()
                 }
             }
         )
@@ -402,6 +418,18 @@ fun OSMapScreen(viewModel: MainViewModel) {
             modifier = Modifier.align(Alignment.TopEnd).padding(top = 16.dp, end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            SmallFloatingActionButton(
+                onClick = {
+                    mapMode = mapMode.next()
+                    mapPreferences.edit().putString("mode", mapMode.name).apply()
+                },
+                containerColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.semantics {
+                    contentDescription = if (mapMode == MapMode.ROAD) "切换到卫星地图" else "切换到普通地图"
+                }
+            ) {
+                Text(if (mapMode == MapMode.ROAD) "卫星" else "普通", modifier = Modifier.padding(horizontal = 8.dp))
+            }
             SmallFloatingActionButton(
                 onClick = {
                     mapView?.let { mv ->
