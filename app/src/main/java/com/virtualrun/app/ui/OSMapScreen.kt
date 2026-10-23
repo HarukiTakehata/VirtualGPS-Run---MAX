@@ -9,7 +9,9 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
@@ -78,8 +80,11 @@ private const val MIN_CURRENT_PACE_DISPLAY_SPEED_MPS = 0.6f
 private enum class RunUiErrorAction {
     DISMISS,
     APP_SETTINGS,
-    DEVELOPER_SETTINGS
+    DEVELOPER_SETTINGS,
+    LOCATION_SETTINGS
 }
+
+private const val LOCATION_REQUEST_TIMEOUT_MS = 10_000L
 
 private data class RunUiError(
     val message: String,
@@ -114,6 +119,8 @@ fun OSMapScreen(viewModel: MainViewModel) {
     var currentMarker by remember { mutableStateOf<Marker?>(null) }
     var markerAnimator by remember { mutableStateOf<ValueAnimator?>(null) }
     var pendingLocationListener by remember { mutableStateOf<LocationListener?>(null) }
+    var locationTimeoutRunnable by remember { mutableStateOf<Runnable?>(null) }
+    val mainHandler = remember { Handler(android.os.Looper.getMainLooper()) }
     var lastCameraFollowAt by remember { mutableLongStateOf(0L) }
     var wasRunning by remember { mutableStateOf(false) }
     var uiError by remember { mutableStateOf<RunUiError?>(null) }
@@ -183,6 +190,8 @@ fun OSMapScreen(viewModel: MainViewModel) {
     DisposableEffect(pendingLocationListener) {
         val listener = pendingLocationListener
         onDispose {
+            locationTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            locationTimeoutRunnable = null
             if (listener != null) {
                 val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
                 runCatching { locationManager.removeUpdates(listener) }
@@ -472,30 +481,81 @@ fun OSMapScreen(viewModel: MainViewModel) {
                     return@FloatingActionButton
                 }
                 val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-                val location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                    ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                val location = listOf(
+                    LocationManager.GPS_PROVIDER,
+                    LocationManager.NETWORK_PROVIDER,
+                    LocationManager.PASSIVE_PROVIDER
+                ).firstNotNullOfOrNull { runCatching { locationManager.getLastKnownLocation(it) }.getOrNull() }
                 if (location != null) {
                     pendingLocationListener?.let { runCatching { locationManager.removeUpdates(it) } }
                     pendingLocationListener = null
                     animateToDeviceLocation(location)
                 } else {
+                    // 无 GMS 的设备（如 GSI/类 AOSP ROM）没有 network provider，
+                    // 对不存在的 provider 调用 requestSingleUpdate 会在 Binder 服务端抛
+                    // IllegalArgumentException: provider doesn't exist —— 必须先探测再请求。
+                    val availableProviders = runCatching { locationManager.allProviders.toSet() }.getOrDefault(emptySet())
+                    val enabled = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+                        .filter { it in availableProviders && locationManager.isProviderEnabled(it) }
+                    if (enabled.isEmpty()) {
+                        val masterOn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            locationManager.isLocationEnabled
+                        } else {
+                            availableProviders.any { locationManager.isProviderEnabled(it) }
+                        }
+                        uiError = if (!masterOn) {
+                            RunUiError("系统定位服务未开启，请前往系统设置开启定位后重试", RunUiErrorAction.LOCATION_SETTINGS)
+                        } else {
+                            RunUiError("设备没有可用的定位服务（缺少 GPS／网络定位后端）", RunUiErrorAction.DISMISS)
+                        }
+                        return@FloatingActionButton
+                    }
+                    val targetProvider = enabled.first()
+
                     pendingLocationListener?.let { runCatching { locationManager.removeUpdates(it) } }
                     val listener = object : LocationListener {
                             override fun onLocationChanged(location: Location) {
                                 animateToDeviceLocation(location)
+                                locationTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+                                locationTimeoutRunnable = null
                                 runCatching { locationManager.removeUpdates(this) }
                                 pendingLocationListener = null
                             }
                             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
                             override fun onProviderEnabled(provider: String) = Unit
-                            override fun onProviderDisabled(provider: String) = Unit
+                            override fun onProviderDisabled(provider: String) {
+                                if (provider == targetProvider) {
+                                    uiError = RunUiError("系统定位服务未开启，请前往系统设置开启定位后重试", RunUiErrorAction.LOCATION_SETTINGS)
+                                }
+                            }
                         }
                     pendingLocationListener = listener
-                    locationManager.requestSingleUpdate(
-                        LocationManager.NETWORK_PROVIDER,
-                        listener,
-                        Looper.getMainLooper()
-                    )
+                    try {
+                        locationManager.requestSingleUpdate(
+                            targetProvider,
+                            listener,
+                            Looper.getMainLooper()
+                        )
+                        // GPS 室内冷启动可能长时间无 fix；超时后释放监听并提示，避免请求悬挂。
+                        val timeout = Runnable {
+                            if (pendingLocationListener === listener) {
+                                runCatching { locationManager.removeUpdates(listener) }
+                                pendingLocationListener = null
+                                locationTimeoutRunnable = null
+                                uiError = RunUiError("定位超时：请确认已开启定位，或在开阔环境下重试", RunUiErrorAction.LOCATION_SETTINGS)
+                            }
+                        }
+                        locationTimeoutRunnable = timeout
+                        mainHandler.postDelayed(timeout, LOCATION_REQUEST_TIMEOUT_MS)
+                    } catch (e: IllegalArgumentException) {
+                        runCatching { locationManager.removeUpdates(listener) }
+                        pendingLocationListener = null
+                        uiError = RunUiError("定位服务不可用：${e.message}", RunUiErrorAction.DISMISS)
+                    } catch (e: SecurityException) {
+                        runCatching { locationManager.removeUpdates(listener) }
+                        pendingLocationListener = null
+                        uiError = RunUiError("请先授予位置权限", RunUiErrorAction.APP_SETTINGS)
+                    }
                 }
             },
             modifier = Modifier.padding(16.dp).align(Alignment.BottomStart).offset(y = locationButtonOffset),
@@ -656,6 +716,11 @@ fun OSMapScreen(viewModel: MainViewModel) {
                             context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
                         } catch (_: Exception) {
                             Toast.makeText(context, "请手动打开开发者选项", Toast.LENGTH_SHORT).show()
+                        }
+                        RunUiErrorAction.LOCATION_SETTINGS -> try {
+                            context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                        } catch (_: Exception) {
+                            Toast.makeText(context, "请手动打开定位设置", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }) {
