@@ -481,12 +481,33 @@ fun OSMapScreen(viewModel: MainViewModel) {
                     return@FloatingActionButton
                 }
                 val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                // 本应用常持有「模拟位置信息应用」授权。跑过虚拟跑步后，若进程被杀或崩溃，
+                // 服务来不及 removeTestProvider，gps/network/fused 会残留被 MockProvider 占用：
+                // 系统此时已关闭真实 GPS 后端，lastKnown 只剩虚拟路线点，真实 fix 永远不会到来。
+                // 请求真实位置前先注销本应用遗留的测试 provider（未占用时为无害 no-op）。
+                if (isRunning) {
+                    uiError = RunUiError(
+                        "虚拟跑步进行中，定位通道正被虚拟位置占用，请先停止跑步后再使用定位",
+                        RunUiErrorAction.DISMISS
+                    )
+                    return@FloatingActionButton
+                }
+                listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, "fused").forEach { provider ->
+                    try {
+                        locationManager.removeTestProvider(provider)
+                    } catch (_: Exception) {
+                        // 未注册 / 占用者是其他应用（无权代其清理）：忽略
+                    }
+                }
                 val location = listOf(
                     LocationManager.GPS_PROVIDER,
                     LocationManager.NETWORK_PROVIDER,
                     LocationManager.PASSIVE_PROVIDER
                 ).firstNotNullOfOrNull { runCatching { locationManager.getLastKnownLocation(it) }.getOrNull() }
-                if (location != null) {
+                if (location != null && location.isFromMockProvider) {
+                    // 清理后仍拿到 mock 位置：占用者是本应用运行中的服务或另一个 Mock 应用
+                    uiError = RunUiError("定位通道当前被模拟定位占用，无法获取真实位置", RunUiErrorAction.DISMISS)
+                } else if (location != null) {
                     pendingLocationListener?.let { runCatching { locationManager.removeUpdates(it) } }
                     pendingLocationListener = null
                     animateToDeviceLocation(location)
@@ -515,7 +536,11 @@ fun OSMapScreen(viewModel: MainViewModel) {
                     pendingLocationListener?.let { runCatching { locationManager.removeUpdates(it) } }
                     val listener = object : LocationListener {
                             override fun onLocationChanged(location: Location) {
-                                animateToDeviceLocation(location)
+                                if (location.isFromMockProvider) {
+                                    uiError = RunUiError("定位结果来自模拟位置，定位通道被 Mock 占用", RunUiErrorAction.DISMISS)
+                                } else {
+                                    animateToDeviceLocation(location)
+                                }
                                 locationTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
                                 locationTimeoutRunnable = null
                                 runCatching { locationManager.removeUpdates(this) }
